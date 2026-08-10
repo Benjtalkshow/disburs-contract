@@ -1,0 +1,17 @@
+use soroban_sdk::contracterror;
+
+/// Errors returned by the payroll contract. The `u32` codes are stable and
+/// surface in transaction results, so never renumber them.
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum Error {
+    /// The contract has not been initialized (no admin/token set).
+    NotInitialized = 1,
+    /// Amount must be positive (deposit/pay) or non-negative (salary).
+    InvalidAmount = 2,
+    /// The worker has no salary configured.
+    NoSalarySet = 3,
+    /// The treasury does not hold enough tokens to cover the payout.
+    InsufficientTreasury = 4,
+}
