@@ -81,6 +81,23 @@ impl PayrollContract {
         Ok(())
     }
 
+    /// Admin-only: pull unused funds back out of the treasury to `to`.
+    pub fn withdraw(env: Env, to: Address, amount: i128) -> Result<(), Error> {
+        storage::get_admin(&env)?.require_auth();
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        let token = storage::get_token(&env)?;
+        let client = token::TokenClient::new(&env, &token);
+        let treasury = env.current_contract_address();
+        if client.balance(&treasury) < amount {
+            return Err(Error::InsufficientTreasury);
+        }
+        client.transfer(&treasury, &to, &amount);
+        env.events().publish((symbol_short!("withdraw"), to), amount);
+        Ok(())
+    }
+
     /// Token balance held by the treasury.
     pub fn treasury_balance(env: Env) -> Result<i128, Error> {
         let token = storage::get_token(&env)?;

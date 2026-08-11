@@ -40,6 +40,29 @@ fn deposit_set_salary_and_pay() {
 }
 
 #[test]
+fn withdraw_returns_unused_funds() {
+    let (env, admin, contract_id, token_address) = setup();
+    let client = PayrollContractClient::new(&env, &contract_id);
+    let token = token::TokenClient::new(&env, &token_address);
+
+    client.deposit(&admin, &500);
+    assert_eq!(client.treasury_balance(), 500);
+
+    client.withdraw(&admin, &300);
+    assert_eq!(client.treasury_balance(), 200);
+    assert_eq!(token.balance(&admin), 800);
+}
+
+#[test]
+fn withdraw_more_than_treasury_fails() {
+    let (env, admin, contract_id, _token) = setup();
+    let client = PayrollContractClient::new(&env, &contract_id);
+
+    client.deposit(&admin, &100);
+    assert!(client.try_withdraw(&admin, &500).is_err());
+}
+
+#[test]
 fn pay_without_salary_fails() {
     let (env, _admin, contract_id, _token) = setup();
     let client = PayrollContractClient::new(&env, &contract_id);
