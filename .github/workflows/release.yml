@@ -1,0 +1,130 @@
+name: Release
+
+# Tag a commit on main to cut a release:
+#   git tag -a v0.1.0 -m "payroll v0.1.0" && git push origin v0.1.0
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build and release (e.g. v0.1.0).
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - name: Install toolchain (from rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked --all-targets
+
+  release:
+    name: Build and publish
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the GitHub Release and upload assets
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - name: Install toolchain (from rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/setup-stellar-cli
+
+      # Inputs go through env rather than straight into the shell, so a crafted
+      # tag name can't inject commands.
+      - name: Resolve version
+        id: version
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-$REF_NAME}"
+          case "$tag" in
+            v[0-9]*) ;;
+            *) echo "::error::expected a v-prefixed version tag, got '$tag'"; exit 1 ;;
+          esac
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Check the tag matches the crate version
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          crate_version="$(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[0].version')"
+          if [ "$crate_version" != "$VERSION" ]; then
+            echo "::error::tag $TAG does not match Cargo.toml version $crate_version"
+            exit 1
+          fi
+
+      - name: Build
+        run: |
+          stellar contract build \
+            --meta source_repo=github:${{ github.repository }} \
+            --meta commit=${{ github.sha }}
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for wasm in target/wasm32v1-none/release/*.wasm; do
+            name="$(basename "$wasm" .wasm)"
+            stellar contract optimize --wasm "$wasm"
+            cp "target/wasm32v1-none/release/${name}.optimized.wasm" "dist/${name}.wasm"
+            stellar contract info interface --wasm "dist/${name}.wasm" > "dist/${name}.interface.rs"
+            stellar contract info meta --wasm "dist/${name}.wasm" > "dist/${name}.meta.txt"
+          done
+          (cd dist && sha256sum ./*.wasm > SHA256SUMS)
+          cat dist/SHA256SUMS
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          {
+            echo "Soroban contract build for \`$TAG\`, produced by this workflow run."
+            echo
+            echo '### sha256'
+            echo '```'
+            cat dist/SHA256SUMS
+            echo '```'
+            echo
+            echo "Reproduce locally with the pinned toolchain and \`stellar contract build\`, then compare hashes."
+          } > notes.md
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* \
+              --title "$TAG" \
+              --notes-file notes.md \
+              --verify-tag
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ steps.version.outputs.tag }}
+          path: dist/
+          if-no-files-found: error
