@@ -1,0 +1,27 @@
+name: Security audit
+
+# CI audits dependencies on every push and PR; this catches advisories that are
+# published while nothing is being pushed.
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays, 06:00 UTC
+  push:
+    paths:
+      - "**/Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/security.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write # so a new advisory opens an issue instead of only failing a run
+
+jobs:
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
