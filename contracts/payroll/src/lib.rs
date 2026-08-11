@@ -48,7 +48,8 @@ impl PayrollContract {
             &env.current_contract_address(),
             &amount,
         );
-        env.events().publish((symbol_short!("deposit"), from), amount);
+        env.events()
+            .publish((symbol_short!("deposit"), from), amount);
         Ok(())
     }
 

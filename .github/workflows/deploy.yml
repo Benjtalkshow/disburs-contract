@@ -1,0 +1,169 @@
+name: Deploy
+
+# Manual only. Deploying spends real funds on mainnet and creates a contract
+# instance that cannot be upgraded (the payroll contract exposes no upgrade
+# entry point), so this never runs off a push.
+on:
+  workflow_dispatch:
+    inputs:
+      network:
+        description: Target network.
+        required: true
+        type: choice
+        default: testnet
+        options: [testnet, futurenet, mainnet]
+      admin:
+        description: Employer/admin address (G... or C...) passed to the constructor.
+        required: true
+        type: string
+      token:
+        description: Payout token contract address (C..., e.g. the USDC SAC).
+        required: true
+        type: string
+      wasm_release_tag:
+        description: >-
+          Release tag whose published wasm to deploy (e.g. v0.1.0). Leave empty
+          to build the wasm from the selected ref instead.
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  deploy:
+    name: Deploy to ${{ inputs.network }}
+    runs-on: ubuntu-latest
+    # Put the signing key on a protected environment: add required reviewers on
+    # `mainnet` so a human approves before the key is ever exposed to a job.
+    environment: ${{ inputs.network }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-stellar-cli
+
+      # Every input reaches the shell through env, never through `${{ }}`
+      # interpolation into the script body, so a crafted value can't inject
+      # commands into a job that holds a signing key.
+      - name: Validate inputs
+        env:
+          ADMIN: ${{ inputs.admin }}
+          TOKEN: ${{ inputs.token }}
+          RELEASE_TAG: ${{ inputs.wasm_release_tag }}
+        run: |
+          set -euo pipefail
+          case "$ADMIN" in
+            G[A-Z2-7]*|C[A-Z2-7]*) ;;
+            *) echo "::error::admin must be a G... or C... address"; exit 1 ;;
+          esac
+          case "$TOKEN" in
+            C[A-Z2-7]*) ;;
+            *) echo "::error::token must be a contract address (C...)"; exit 1 ;;
+          esac
+          case "$RELEASE_TAG" in
+            ''|v[0-9]*) ;;
+            *) echo "::error::wasm_release_tag must be empty or a v-prefixed tag"; exit 1 ;;
+          esac
+
+      - name: Fetch released wasm
+        if: inputs.wasm_release_tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.wasm_release_tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          gh release download "$RELEASE_TAG" \
+            --pattern 'disburs_payroll.wasm' --pattern 'SHA256SUMS' --dir dist
+          (cd dist && sha256sum --check --ignore-missing SHA256SUMS)
+
+      - name: Install toolchain (from rust-toolchain.toml)
+        if: inputs.wasm_release_tag == ''
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - uses: Swatinem/rust-cache@v2
+        if: inputs.wasm_release_tag == ''
+
+      - name: Build wasm from ${{ github.ref_name }}
+        if: inputs.wasm_release_tag == ''
+        run: |
+          set -euo pipefail
+          cargo test --locked --all-targets
+          stellar contract build \
+            --meta source_repo=github:${{ github.repository }} \
+            --meta commit=${{ github.sha }}
+          mkdir -p dist
+          stellar contract optimize --wasm target/wasm32v1-none/release/disburs_payroll.wasm
+          cp target/wasm32v1-none/release/disburs_payroll.optimized.wasm dist/disburs_payroll.wasm
+
+      - name: Deploy
+        id: deploy
+        env:
+          # A secret key (S...). Store it per environment, never repo-wide.
+          STELLAR_ACCOUNT: ${{ secrets.STELLAR_SECRET_KEY }}
+          STELLAR_NETWORK: ${{ inputs.network }}
+          ADMIN: ${{ inputs.admin }}
+          TOKEN: ${{ inputs.token }}
+        run: |
+          set -euo pipefail
+          test -n "$STELLAR_ACCOUNT" || {
+            echo "::error::secret STELLAR_SECRET_KEY is not set on environment '$STELLAR_NETWORK'"
+            exit 1
+          }
+          contract_id="$(stellar contract deploy \
+            --wasm dist/disburs_payroll.wasm \
+            --quiet \
+            -- \
+            --admin "$ADMIN" \
+            --token "$TOKEN" | tail -n 1)"
+          echo "contract_id=$contract_id" >> "$GITHUB_OUTPUT"
+          echo "$contract_id"
+
+      - name: Verify the deployed instance
+        env:
+          STELLAR_ACCOUNT: ${{ secrets.STELLAR_SECRET_KEY }}
+          STELLAR_NETWORK: ${{ inputs.network }}
+          CONTRACT_ID: ${{ steps.deploy.outputs.contract_id }}
+          ADMIN: ${{ inputs.admin }}
+          TOKEN: ${{ inputs.token }}
+        run: |
+          set -euo pipefail
+          on_chain_admin="$(stellar contract invoke --id "$CONTRACT_ID" --send no --quiet -- get_admin | tr -d '"')"
+          on_chain_balance="$(stellar contract invoke --id "$CONTRACT_ID" --send no --quiet -- treasury_balance | tr -d '"')"
+          echo "get_admin -> $on_chain_admin"
+          echo "treasury_balance -> $on_chain_balance"
+          if [ "$on_chain_admin" != "$ADMIN" ]; then
+            echo "::error::deployed admin ($on_chain_admin) does not match the requested admin"
+            exit 1
+          fi
+
+      - name: Record the deployment
+        env:
+          NETWORK: ${{ inputs.network }}
+          CONTRACT_ID: ${{ steps.deploy.outputs.contract_id }}
+          ADMIN: ${{ inputs.admin }}
+          TOKEN: ${{ inputs.token }}
+          SOURCE: ${{ inputs.wasm_release_tag || github.sha }}
+        run: |
+          set -euo pipefail
+          sha="$(sha256sum dist/disburs_payroll.wasm | cut -d' ' -f1)"
+          {
+            echo "### Deployed to $NETWORK"
+            echo
+            echo "| field | value |"
+            echo "| --- | --- |"
+            echo "| contract id | \`$CONTRACT_ID\` |"
+            echo "| admin | \`$ADMIN\` |"
+            echo "| token | \`$TOKEN\` |"
+            echo "| source | \`$SOURCE\` |"
+            echo "| wasm sha256 | \`$sha\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: deployment-${{ inputs.network }}-${{ github.run_id }}
+          path: dist/disburs_payroll.wasm
+          if-no-files-found: error

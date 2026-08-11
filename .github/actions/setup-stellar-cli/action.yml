@@ -1,0 +1,47 @@
+name: Setup Stellar CLI
+description: Install a pinned, prebuilt stellar CLI binary and cache it.
+
+inputs:
+  version:
+    description: stellar-cli version to install (no leading "v").
+    required: false
+    default: "23.1.4"
+
+runs:
+  using: composite
+  steps:
+    - name: Cache stellar CLI
+      id: cache
+      uses: actions/cache@v6
+      with:
+        path: ~/.stellar-cli-bin
+        key: stellar-cli-${{ runner.os }}-${{ runner.arch }}-${{ inputs.version }}
+
+    - name: Download stellar CLI
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        version="${{ inputs.version }}"
+        case "${{ runner.arch }}" in
+          X64) target="x86_64-unknown-linux-gnu" ;;
+          ARM64) target="aarch64-unknown-linux-gnu" ;;
+          *) echo "unsupported arch: ${{ runner.arch }}" >&2; exit 1 ;;
+        esac
+        url="https://github.com/stellar/stellar-cli/releases/download/v${version}/stellar-cli-${version}-${target}.tar.gz"
+        echo "Downloading $url"
+        mkdir -p "$RUNNER_TEMP/stellar-cli" ~/.stellar-cli-bin
+        curl --fail --location --silent --show-error "$url" \
+          | tar -xz -C "$RUNNER_TEMP/stellar-cli"
+        binary="$(find "$RUNNER_TEMP/stellar-cli" -type f -name stellar -perm -u+x | head -n 1)"
+        test -n "$binary" || { echo "stellar binary not found in archive" >&2; exit 1; }
+        install -m 0755 "$binary" ~/.stellar-cli-bin/stellar
+
+    - name: Add stellar CLI to PATH
+      shell: bash
+      run: |
+        echo "$HOME/.stellar-cli-bin" >> "$GITHUB_PATH"
+
+    - name: Verify
+      shell: bash
+      run: stellar --version

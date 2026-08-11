@@ -1,0 +1,35 @@
+version: 2
+
+updates:
+  # Cargo.lock is committed on purpose (see CONTEXT.md) and soroban-sdk is
+  # pinned to 22.x deliberately, so major bumps to it are ignored: moving to 27
+  # is a decision, not a chore.
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      cargo-minor-patch:
+        update-types: [minor, patch]
+    ignore:
+      - dependency-name: soroban-sdk
+        update-types: ["version-update:semver-major"]
+      # 3.0 breaks soroban-env-host's test utilities (rand_core/CryptoRng
+      # mismatch); the 2.2.0 pin in Cargo.lock is intentional.
+      - dependency-name: ed25519-dalek
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: "chore(ci)"
+    groups:
+      github-actions:
+        patterns: ["*"]
