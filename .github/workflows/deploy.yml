@@ -42,7 +42,7 @@ jobs:
     # `mainnet` so a human approves before the key is ever exposed to a job.
     environment: ${{ inputs.network }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-stellar-cli
 
       # Every input reaches the shell through env, never through `${{ }}`
@@ -162,7 +162,7 @@ jobs:
             echo "| wasm sha256 | \`$sha\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: deployment-${{ inputs.network }}-${{ github.run_id }}
           path: dist/disburs_payroll.wasm

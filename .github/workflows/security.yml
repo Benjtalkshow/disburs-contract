@@ -14,6 +14,7 @@ on:
 
 permissions:
   contents: read
+  checks: write # audit-check reports through a check run
   issues: write # so a new advisory opens an issue instead of only failing a run
 
 jobs:
@@ -21,7 +22,7 @@ jobs:
     name: cargo audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: rustsec/audit-check@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}

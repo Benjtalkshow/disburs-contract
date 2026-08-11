@@ -12,7 +12,7 @@ runs:
   steps:
     - name: Cache stellar CLI
       id: cache
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: ~/.stellar-cli-bin
         key: stellar-cli-${{ runner.os }}-${{ runner.arch }}-${{ inputs.version }}

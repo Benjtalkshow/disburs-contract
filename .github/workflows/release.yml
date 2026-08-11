@@ -24,7 +24,7 @@ jobs:
     name: Verify
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.tag || github.ref }}
       - name: Install toolchain (from rust-toolchain.toml)
@@ -41,7 +41,7 @@ jobs:
     permissions:
       contents: write # create the GitHub Release and upload assets
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.tag || github.ref }}
       - name: Install toolchain (from rust-toolchain.toml)
@@ -123,7 +123,7 @@ jobs:
               --verify-tag
           fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-${{ steps.version.outputs.tag }}
           path: dist/
